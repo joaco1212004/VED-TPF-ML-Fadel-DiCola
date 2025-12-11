@@ -48,13 +48,13 @@ def organize_trips_by_vehid():
                     trip_data.to_csv(trip_path, index=False)
                     total_trips_created += 1
             
-            print(f"  ✓ Extracted trips from {filename}")
+            print(f"Extracted trips from {filename}")
             
         except Exception as e:
-            print(f"  Error processing {filename}: {str(e)}")
+            print(f"Error processing {filename}: {str(e)}")
     
-    print(f"\n✓ Complete! Created {total_trips_created} trip CSV files")
-    print(f"  Location: VED_DynamicData/VehId_*/Trip_*.csv")
+    print(f"\nComplete! Created {total_trips_created} trip CSV files")
+    print(f"Location: VED_DynamicData/VehId_*/Trip_*.csv")
 
 if __name__ == "__main__":
     organize_trips_by_vehid()
