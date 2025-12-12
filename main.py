@@ -23,7 +23,6 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-# Directorio base del script
 SCRIPT_DIR = Path(__file__).parent.resolve()
 
 # Columnas usadas para calcular los targets (data leakage prevention)
@@ -50,7 +49,7 @@ def load_models():
             "Ejecuta primero el notebook 5final_model_train_test.ipynb"
         )
     
-    # Cargar scaler (puede ser uno único o separados)
+    # Cargar scaler 
     if (model_dir / 'scaler_combustion.pkl').exists():
         scaler_combustion = joblib.load(model_dir / 'scaler_combustion.pkl')
         scaler_electric = joblib.load(model_dir / 'scaler_electric.pkl')
@@ -121,7 +120,6 @@ def predict_sample(sample_row, models, model_type):
     scaler = models[model_type]['scaler']
     model = models[model_type]['model']
     
-    # Usar los feature names del scaler (que son los originales con corchetes)
     scaler_feature_names = list(scaler.feature_names_in_)
     
     # Extraer features en el orden correcto
@@ -129,11 +127,9 @@ def predict_sample(sample_row, models, model_type):
     for feat_name in scaler_feature_names:
         value = None
         
-        # Buscar directamente en sample_row
         if feat_name in sample_row:
             value = sample_row[feat_name]
         else:
-            # Probar con nombre sanitizado
             sanitized_name = feat_name.replace('[', '').replace(']', '').replace('<', '').replace('>', '')
             if sanitized_name in sample_row:
                 value = sample_row[sanitized_name]
@@ -150,7 +146,6 @@ def predict_sample(sample_row, models, model_type):
     # Crear DataFrame con los feature names del scaler
     X = pd.DataFrame([features], columns=scaler_feature_names)
     
-    # Escalar y predecir
     X_scaled = scaler.transform(X)
     prediction = model.predict(X_scaled)[0]
     
@@ -258,7 +253,6 @@ def main():
     print("VED - Vehicle Energy Dataset - Predicción de Consumo")
     print("="*70)
     
-    # Cargar modelos
     print("\nCargando modelos...")
     try:
         models = load_models()
@@ -267,12 +261,10 @@ def main():
         print(f"\nError: {e}")
         return 1
     
-    # Mostrar métricas de los modelos
     metrics = models['metrics']
     print(f"\nModelo Combustión: R²={metrics['combustion']['r2']:.4f}, RMSE={metrics['combustion']['rmse']:.4f}")
     print(f"Modelo Eléctrico: R²={metrics['electric']['r2']:.4f}, RMSE={metrics['electric']['rmse']:.4f}")
     
-    # Cargar samples de demo
     print("\nCargando samples de demostración...")
     try:
         samples = load_demo_samples(args.type)
@@ -305,7 +297,7 @@ def main():
     
     print(f"Usando dataset: {sample_type} ({len(df)} samples disponibles)")
     
-    # Listar samples si se pide
+    # Listar samples
     if args.list:
         print(f"\nSamples disponibles en '{sample_type}':")
         for i, row in df.iterrows():
@@ -327,7 +319,6 @@ def main():
     
     print(f"\nMostrando sample #{idx}:")
     
-    # Mostrar predicción
     display_prediction(sample_row, models, sample_type)
     
     print("\nUso: python main.py --help para ver más opciones\n")
