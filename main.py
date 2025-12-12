@@ -167,67 +167,67 @@ def display_prediction(sample_row, models, sample_type):
     filename = sample_row.get('filename', 'N/A')
     
     print("\n" + "="*70)
-    print("                    PREDICCIÓN DE CONSUMO ENERGÉTICO")
+    print("PREDICCIÓN DE CONSUMO ENERGÉTICO")
     print("="*70)
     
-    print(f"\n📋 INFORMACIÓN DEL VIAJE:")
-    print(f"   Archivo: {filename}")
-    print(f"   VehId: {veh_id}")
-    print(f"   Tipo de Vehículo: {veh_type}")
+    print(f"\nINFORMACIÓN DEL VIAJE:")
+    print(f"Archivo: {filename}")
+    print(f"VehId: {veh_id}")
+    print(f"Tipo de Vehículo: {veh_type}")
     
     # Verificar si tiene columnas de cálculo de target
     has_target_cols = any(col in sample_row.index for col in TARGET_CALCULATION_COLUMNS)
     
     if has_target_cols:
-        print(f"\n   ⚠️  Este sample contiene las columnas usadas para calcular")
-        print(f"       los targets (Fuel Rate, MAF, HV Battery, etc.)")
-        print(f"       Los valores reales están disponibles para comparación.")
+        print(f"\nEste sample contiene las columnas usadas para calcular")
+        print(f"los targets (Fuel Rate, MAF, HV Battery, etc.)")
+        print(f"Los valores reales están disponibles para comparación.")
     
     print("\n" + "-"*70)
     
     # Predicción de combustión
     if veh_type in ['ICE', 'HEV', 'PHEV'] or sample_type == 'combustion':
-        print("\n📊 CONSUMO DE COMBUSTIÓN (L/100km):")
+        print("\nCONSUMO DE COMBUSTIÓN (L/100km):")
         
         pred_comb = predict_sample(sample_row, models, 'combustion')
-        print(f"   Predicción: {pred_comb:.2f} L/100km")
+        print(f"Predicción: {pred_comb:.2f} L/100km")
         
         # Valor real si existe
         real_comb = sample_row.get('Y_consumption_combustion_L_per_100km', None)
         if real_comb is not None and not pd.isna(real_comb) and real_comb > 0:
             error = pred_comb - real_comb
             pct_error = (error / real_comb) * 100
-            print(f"   Valor Real: {real_comb:.2f} L/100km")
-            print(f"   Diferencia: {error:+.2f} L/100km ({pct_error:+.1f}%)")
+            print(f"Valor Real: {real_comb:.2f} L/100km")
+            print(f"Diferencia: {error:+.2f} L/100km ({pct_error:+.1f}%)")
             
             if abs(pct_error) < 10:
-                print(f"   ✅ Excelente predicción (error < 10%)")
+                print(f"Excelente predicción (error < 10%)")
             elif abs(pct_error) < 25:
-                print(f"   ✓ Buena predicción (error < 25%)")
+                print(f"Buena predicción (error < 25%)")
             else:
-                print(f"   ⚠ Predicción con margen de error significativo")
+                print(f"Predicción con margen de error significativo")
     
     # Predicción de eléctrico
     if veh_type in ['PHEV', 'EV', 'HEV'] or sample_type == 'electric':
-        print("\n⚡ CONSUMO ELÉCTRICO (kWh/km):")
+        print("\nCONSUMO ELÉCTRICO (kWh/km):")
         
         pred_elec = predict_sample(sample_row, models, 'electric')
-        print(f"   Predicción: {pred_elec:.4f} kWh/km ({pred_elec*100:.2f} kWh/100km)")
+        print(f"Predicción: {pred_elec:.4f} kWh/km ({pred_elec*100:.2f} kWh/100km)")
         
         # Valor real si existe
         real_elec = sample_row.get('Y_consumption_electric_kWh_per_km', None)
         if real_elec is not None and not pd.isna(real_elec) and real_elec > 0:
             error = pred_elec - real_elec
             pct_error = (error / real_elec) * 100
-            print(f"   Valor Real: {real_elec:.4f} kWh/km ({real_elec*100:.2f} kWh/100km)")
-            print(f"   Diferencia: {error:+.4f} kWh/km ({pct_error:+.1f}%)")
+            print(f"Valor Real: {real_elec:.4f} kWh/km ({real_elec*100:.2f} kWh/100km)")
+            print(f"Diferencia: {error:+.4f} kWh/km ({pct_error:+.1f}%)")
             
             if abs(pct_error) < 10:
-                print(f"   ✅ Excelente predicción (error < 10%)")
+                print(f"Excelente predicción (error < 10%)")
             elif abs(pct_error) < 25:
-                print(f"   ✓ Buena predicción (error < 25%)")
+                print(f"Buena predicción (error < 25%)")
             else:
-                print(f"   ⚠ Predicción con margen de error significativo")
+                print(f"Predicción con margen de error significativo")
     
     print("\n" + "="*70)
 
@@ -255,32 +255,32 @@ def main():
     args = parser.parse_args()
     
     print("\n" + "="*70)
-    print("     VED - Vehicle Energy Dataset - Predicción de Consumo")
+    print("VED - Vehicle Energy Dataset - Predicción de Consumo")
     print("="*70)
     
     # Cargar modelos
-    print("\n🔄 Cargando modelos...")
+    print("\nCargando modelos...")
     try:
         models = load_models()
-        print("   ✓ Modelos cargados correctamente")
+        print("Modelos cargados correctamente")
     except FileNotFoundError as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\nError: {e}")
         return 1
     
     # Mostrar métricas de los modelos
     metrics = models['metrics']
-    print(f"\n📊 Modelo Combustión: R²={metrics['combustion']['r2']:.4f}, RMSE={metrics['combustion']['rmse']:.4f}")
-    print(f"⚡ Modelo Eléctrico: R²={metrics['electric']['r2']:.4f}, RMSE={metrics['electric']['rmse']:.4f}")
+    print(f"\nModelo Combustión: R²={metrics['combustion']['r2']:.4f}, RMSE={metrics['combustion']['rmse']:.4f}")
+    print(f"Modelo Eléctrico: R²={metrics['electric']['r2']:.4f}, RMSE={metrics['electric']['rmse']:.4f}")
     
     # Cargar samples de demo
-    print("\n🔄 Cargando samples de demostración...")
+    print("\nCargando samples de demostración...")
     try:
         samples = load_demo_samples(args.type)
         if not samples:
-            print("❌ No se encontraron samples de demostración")
+            print("No se encontraron samples de demostración")
             return 1
     except FileNotFoundError as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\nError: {e}")
         return 1
     
     # Determinar qué dataset usar
@@ -303,21 +303,21 @@ def main():
         sample_type = list(samples.keys())[0]
         df = samples[sample_type]
     
-    print(f"   ✓ Usando dataset: {sample_type} ({len(df)} samples disponibles)")
+    print(f"Usando dataset: {sample_type} ({len(df)} samples disponibles)")
     
     # Listar samples si se pide
     if args.list:
-        print(f"\n📋 Samples disponibles en '{sample_type}':")
+        print(f"\nSamples disponibles en '{sample_type}':")
         for i, row in df.iterrows():
             veh_type = row.get('Vehicle Type', 'N/A')
             filename = row.get('filename', 'N/A')
-            print(f"   [{i:3d}] {veh_type:5s} - {filename}")
+            print(f"[{i:3d}] {veh_type:5s} - {filename}")
         return 0
     
     # Seleccionar sample
     if args.index is not None:
         if args.index >= len(df):
-            print(f"❌ Índice {args.index} fuera de rango (max: {len(df)-1})")
+            print(f"Índice {args.index} fuera de rango (max: {len(df)-1})")
             return 1
         idx = args.index
     else:
@@ -325,12 +325,12 @@ def main():
     
     sample_row = df.iloc[idx]
     
-    print(f"\n🎯 Mostrando sample #{idx}:")
+    print(f"\nMostrando sample #{idx}:")
     
     # Mostrar predicción
     display_prediction(sample_row, models, sample_type)
     
-    print("\n💡 Uso: python main.py --help para ver más opciones\n")
+    print("\nUso: python main.py --help para ver más opciones\n")
     
     return 0
 
