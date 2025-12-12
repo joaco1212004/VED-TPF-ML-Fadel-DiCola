@@ -1,330 +1,397 @@
 """
-VED Energy Consumption Prediction - Demo
-=========================================
+VED - Modelo Final de Predicción de Consumo Energético
 
-Este script demuestra el funcionamiento de los modelos entrenados para predecir
-el consumo energético de vehículos usando el dataset VED.
-
-Modelos disponibles:
-- Combustión (L/100km): Para vehículos ICE, HEV, PHEV
-- Eléctrico (kWh/km): Para vehículos PHEV, EV
+Modelo ejecutable que realiza predicciones sobre un conjunto de datos
+con el mismo formato usado para el desarrollo del modelo.
 
 Uso:
-    python main.py                    # Muestra un sample aleatorio
-    python main.py --index 5          # Muestra el sample #5
-    python main.py --type combustion  # Solo samples de combustión
-    python main.py --type electric    # Solo samples de eléctrico
-    python main.py --type phev        # Samples PHEV con ambos targets
+    python main.py                                # Demo con sample aleatorio
+    python main.py _                              # Predice todo el dataset y guarda en predicciones.csv
+    python main.py _ -o resultado.csv             # Predice todo el dataset y guarda en archivo
+    python main.py datos.csv                      # Predice CSV externo y guarda en predicciones.csv
+    python main.py datos.csv -o resultados.csv   # Especifica archivo de salida
+    python main.py datos.csv --show              # Muestra predicciones en consola
+    python main.py datos.csv -m modelo.pkl        # Usa modelo personalizado
+
+Formato de entrada (CSV):
+    El archivo debe tener las mismas columnas que X_metrics.csv:
+    - filename, VehId, DayNum, Trip, Vehicle Type, ...
+    - Métricas estadísticas de las señales del vehículo
+
+Formato de salida (CSV):
+    - filename: identificador del viaje
+    - VehId: identificador del vehículo
+    - Vehicle Type: tipo de vehículo (ICE, HEV, PHEV, EV)
+    - pred_combustion_L_per_100km: predicción de consumo de combustible
+    - pred_electric_kWh_per_km: predicción de consumo eléctrico
+
+Modelos:
+    - Combustión (XGBoost): R²=0.80, RMSE=2.26 L/100km
+    - Eléctrico (XGBoost): R²=0.63, RMSE=0.069 kWh/km
 """
 
 import argparse
+import sys
+import warnings
+from pathlib import Path
+
 import joblib
 import numpy as np
 import pandas as pd
-from pathlib import Path
+
+warnings.filterwarnings('ignore')
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
-
-# Columnas usadas para calcular los targets (data leakage prevention)
-TARGET_CALCULATION_COLUMNS = {
-    'Fuel Rate[L/hr]',
-    'MAF[g/sec]',
-    'HV Battery Current[A]',
-    'HV Battery Voltage[V]',
-    'HV Battery SOC[%]',
-    'Short Term Fuel Trim Bank 1[%]',
-    'Short Term Fuel Trim Bank 2[%]',
-    'Long Term Fuel Trim Bank 1[%]',
-    'Long Term Fuel Trim Bank 2[%]',
-}
+MODEL_DIR = SCRIPT_DIR / 'models' / 'saved_models' / 'final'
 
 
-def load_models():
-    """Carga los modelos, scalers y metadatos."""
-    model_dir = SCRIPT_DIR / 'models/saved_models/final'
+def load_models(custom_model_path=None):
+    """Carga los modelos entrenados y scalers."""
     
-    if not model_dir.exists():
-        raise FileNotFoundError(
-            f"No se encontró el directorio de modelos: {model_dir}\n"
-            "Ejecuta primero el notebook 5final_model_train_test.ipynb"
-        )
+    # Si se especifica modelo personalizado
+    if custom_model_path:
+        model_path = Path(custom_model_path)
+        if not model_path.exists():
+            print(f"Error: No se encontró el modelo: {custom_model_path}")
+            sys.exit(1)
+        
+        # Cargar modelo personalizado
+        custom_model = joblib.load(model_path)
+        
+        # Buscar scaler en el mismo directorio
+        model_dir = model_path.parent
+        model_name = model_path.stem  # ej: Random_Forest_combustion
+        
+        # Determinar tipo de target del nombre del modelo
+        scaler_path = None
+        if '_combustion' in model_name or 'combustion' in model_name.lower():
+            scaler_path = model_dir / 'scaler_combustion.pkl'
+        elif '_electric' in model_name or 'electric' in model_name.lower():
+            scaler_path = model_dir / 'scaler_electric.pkl'
+        
+        # Si no se encontró, buscar scaler genérico
+        if scaler_path is None or not scaler_path.exists():
+            scaler_path = model_dir / 'scaler.pkl'
+        
+        # Para modelos fourier, buscar en saved_models
+        if not scaler_path.exists() and 'fourier' in str(model_path).lower():
+            if '_combustion' in model_name or 'combustion' in model_name.lower():
+                scaler_path = SCRIPT_DIR / 'models' / 'saved_models' / 'fourier_scaler_combustion.pkl'
+            elif '_electric' in model_name or 'electric' in model_name.lower():
+                scaler_path = SCRIPT_DIR / 'models' / 'saved_models' / 'fourier_scaler_electric.pkl'
+        
+        custom_scaler = None
+        if scaler_path and scaler_path.exists():
+            custom_scaler = joblib.load(scaler_path)
+        else:
+            print(f"Advertencia: No se encontró scaler para el modelo")
+        
+        return {
+            'custom': {
+                'model': custom_model,
+                'scaler': custom_scaler,
+                'path': model_path,
+            },
+            'metrics': {'custom': {'r2': 'N/A', 'rmse': 'N/A'}}
+        }
     
-    # Cargar scaler 
-    if (model_dir / 'scaler_combustion.pkl').exists():
-        scaler_combustion = joblib.load(model_dir / 'scaler_combustion.pkl')
-        scaler_electric = joblib.load(model_dir / 'scaler_electric.pkl')
-    else:
-        # Fallback: usar scaler único para ambos
-        scaler_final = joblib.load(model_dir / 'scaler_final.pkl')
-        scaler_combustion = scaler_final
-        scaler_electric = scaler_final
+    # Cargar modelos por defecto
+    if not MODEL_DIR.exists():
+        print(f"Error: No se encontró el directorio de modelos: {MODEL_DIR}")
+        print("Ejecutá primero el notebook 5final_model_train_test.ipynb")
+        sys.exit(1)
     
-    models = {
-        'combustion': {
-            'model': joblib.load(model_dir / 'xgboost_combustion.pkl'),
-            'scaler': scaler_combustion,
-        },
-        'electric': {
-            'model': joblib.load(model_dir / 'xgboost_electric.pkl'),
-            'scaler': scaler_electric,
-        },
-        'feature_names': joblib.load(model_dir / 'feature_names.pkl'),
-        'metrics': joblib.load(model_dir / 'final_metrics.pkl'),
+    models = {}
+    
+    # Cargar modelo y scaler de combustión
+    models['combustion'] = {
+        'model': joblib.load(MODEL_DIR / 'xgboost_combustion.pkl'),
+        'scaler': joblib.load(MODEL_DIR / 'scaler_combustion.pkl'),
     }
     
-    # Cargar feature_cols originales para mapeo
-    demo_dir = model_dir / 'demo_samples'
-    if (demo_dir / 'original_feature_cols.pkl').exists():
-        models['original_feature_cols'] = joblib.load(demo_dir / 'original_feature_cols.pkl')
+    # Cargar modelo y scaler eléctrico
+    models['electric'] = {
+        'model': joblib.load(MODEL_DIR / 'xgboost_electric.pkl'),
+        'scaler': joblib.load(MODEL_DIR / 'scaler_electric.pkl'),
+    }
+    
+    # Cargar métricas
+    models['metrics'] = joblib.load(MODEL_DIR / 'final_metrics.pkl')
     
     return models
 
 
-def load_demo_samples(sample_type='random'):
-    """Carga samples de demostración del test set."""
-    demo_dir = SCRIPT_DIR / 'models/saved_models/final/demo_samples'
+def prepare_features(df, scaler):
+    """Prepara las features en el orden correcto para el modelo."""
+    feature_names = list(scaler.feature_names_in_)
     
-    if not demo_dir.exists():
-        raise FileNotFoundError(
-            f"No se encontró el directorio de demos: {demo_dir}\n"
-            "Ejecuta primero el notebook 5final_model_train_test.ipynb"
-        )
+    # Crear matriz de features
+    X = pd.DataFrame(index=df.index, columns=feature_names)
     
-    samples = {}
-    
-    if sample_type in ['combustion', 'random', 'all']:
-        comb_file = demo_dir / 'demo_combustion.csv'
-        if comb_file.exists():
-            samples['combustion'] = pd.read_csv(comb_file)
-    
-    if sample_type in ['electric', 'random', 'all']:
-        elec_file = demo_dir / 'demo_electric.csv'
-        if elec_file.exists():
-            samples['electric'] = pd.read_csv(elec_file)
-    
-    if sample_type in ['phev', 'random', 'all']:
-        phev_file = demo_dir / 'demo_phev_both.csv'
-        if phev_file.exists():
-            samples['phev'] = pd.read_csv(phev_file)
-    
-    return samples
-
-
-def predict_sample(sample_row, models, model_type):
-    """Realiza predicción para un sample.
-    
-    El scaler usa feature names originales (con corchetes).
-    Los CSVs de demo tienen columnas con nombres originales (con corchetes).
-    Necesitamos extraer las features en el mismo orden que el scaler.
-    """
-    scaler = models[model_type]['scaler']
-    model = models[model_type]['model']
-    
-    scaler_feature_names = list(scaler.feature_names_in_)
-    
-    # Extraer features en el orden correcto
-    features = []
-    for feat_name in scaler_feature_names:
-        value = None
-        
-        if feat_name in sample_row:
-            value = sample_row[feat_name]
+    for feat in feature_names:
+        if feat in df.columns:
+            X[feat] = df[feat].values
         else:
-            sanitized_name = feat_name.replace('[', '').replace(']', '').replace('<', '').replace('>', '')
-            if sanitized_name in sample_row:
-                value = sample_row[sanitized_name]
+            # Buscar con nombre sanitizado
+            sanitized = feat.replace('[', '').replace(']', '').replace('<', '').replace('>', '')
+            if sanitized in df.columns:
+                X[feat] = df[sanitized].values
+            else:
+                X[feat] = 0.0
+    
+    # Convertir a numérico
+    X = X.apply(pd.to_numeric, errors='coerce').fillna(0)
+    
+    return X
+
+
+def demo_mode(models, output_file=None):
+    """Modo demo: sample aleatorio o predicción de todo el dataset."""
+    data_path = SCRIPT_DIR / 'Data' / 'X' / 'X_metrics.csv'
+    y_path = SCRIPT_DIR / 'Data' / 'Y' / 'Y.csv'
+    
+    if not data_path.exists():
+        print(f"Error: No se encontró el dataset: {data_path}")
+        return 1
+    
+    # Cargar datos
+    df = pd.read_csv(data_path, low_memory=False)
+    
+    # Cargar valores reales si existen
+    y_real = None
+    if y_path.exists():
+        y_real = pd.read_csv(y_path)
+    
+    # Si hay archivo de salida, predecir todo el dataset
+    if output_file:
+        print(f"\nDatos: {data_path.name}")
+        print(f"  {len(df)} registros")
         
-        # Convertir a float
-        if value is None:
-            features.append(0.0)
+        # Realizar predicciones
+        results = predict(df, models)
+        
+        # Agregar valores reales si existen (solo modelos estándar)
+        if y_real is not None and 'custom' not in models:
+            # Usar índice para evitar duplicados
+            y_subset = y_real[['filename', 'Y_consumption_combustion_L_per_100km', 'Y_consumption_electric_kWh_per_km']].drop_duplicates(subset='filename')
+            results = results.merge(
+                y_subset,
+                on='filename',
+                how='left'
+            )
+            results.rename(columns={
+                'Y_consumption_combustion_L_per_100km': 'real_combustion_L_per_100km',
+                'Y_consumption_electric_kWh_per_km': 'real_electric_kWh_per_km'
+            }, inplace=True)
+        
+        # Guardar
+        results.to_csv(output_file, index=False)
+        print(f"\nPredicciones guardadas en: {output_file}")
+        
+        # Resumen (solo si no es modelo custom)
+        if 'custom' in models:
+            if 'prediction' in results.columns:
+                mean_pred = results['prediction'].mean()
+                print(f"  {len(results)} predicciones, promedio {mean_pred:.4f}")
         else:
-            try:
-                features.append(float(value))
-            except (ValueError, TypeError):
-                features.append(0.0)
+            valid_comb = results['pred_combustion_L_per_100km'].notna()
+            if valid_comb.any():
+                mean_comb = results.loc[valid_comb, 'pred_combustion_L_per_100km'].mean()
+                print(f"  Combustión: {valid_comb.sum()} predicciones, promedio {mean_comb:.2f} L/100km")
+            
+            valid_elec = results['pred_electric_kWh_per_km'].notna()
+            if valid_elec.any():
+                mean_elec = results.loc[valid_elec, 'pred_electric_kWh_per_km'].mean()
+                print(f"  Eléctrico:  {valid_elec.sum()} predicciones, promedio {mean_elec:.4f} kWh/km")
+        
+        return 0
     
-    # Crear DataFrame con los feature names del scaler
-    X = pd.DataFrame([features], columns=scaler_feature_names)
+    # Modo sample aleatorio (sin archivo de salida)
+    idx = np.random.randint(0, len(df))
+    sample = df.iloc[[idx]]
     
-    X_scaled = scaler.transform(X)
-    prediction = model.predict(X_scaled)[0]
+    # Obtener info del sample
+    filename = sample['filename'].values[0]
+    veh_id = sample['VehId'].values[0]
+    veh_type = sample['Vehicle Type'].values[0]
     
-    return prediction
-    return prediction
+    # Realizar predicción
+    results = predict(sample, models)
+    pred_comb = results['pred_combustion_L_per_100km'].values[0]
+    pred_elec = results['pred_electric_kWh_per_km'].values[0]
+    
+    # Buscar valores reales
+    real_comb = None
+    real_elec = None
+    if y_real is not None:
+        match = y_real[y_real['filename'] == filename]
+        if len(match) > 0:
+            real_comb = match['Y_consumption_combustion_L_per_100km'].values[0]
+            real_elec = match['Y_consumption_electric_kWh_per_km'].values[0]
+    
+    # Mostrar resultado
+    print(f"\nSample #{idx} de {len(df)}")
+    print(f"Viaje: {filename}")
+    print(f"VehId: {veh_id} | Tipo: {veh_type}")
+    
+    if not np.isnan(pred_comb):
+        if real_comb is not None and not np.isnan(real_comb) and real_comb > 0:
+            error = ((pred_comb - real_comb) / real_comb) * 100
+            print(f"\nCombustión: {pred_comb:.2f} L/100km (real: {real_comb:.2f}, error: {error:+.1f}%)")
+        else:
+            print(f"\nCombustión: {pred_comb:.2f} L/100km")
+    
+    if not np.isnan(pred_elec):
+        if real_elec is not None and not np.isnan(real_elec) and real_elec > 0:
+            error = ((pred_elec - real_elec) / real_elec) * 100
+            print(f"Eléctrico: {pred_elec:.4f} kWh/km (real: {real_elec:.4f}, error: {error:+.1f}%)")
+        else:
+            print(f"Eléctrico: {pred_elec:.4f} kWh/km")
+    
+    print()
+    return 0
 
 
-def display_prediction(sample_row, models, sample_type):
-    """Muestra la predicción para un sample con formato bonito."""
+def predict(df, models):
+    """Realiza predicciones para todo el DataFrame."""
+    results = pd.DataFrame()
     
-    # Info del vehículo
-    veh_type = sample_row.get('Vehicle Type', 'Unknown')
-    veh_id = sample_row.get('VehId', 'N/A')
-    filename = sample_row.get('filename', 'N/A')
+    # Copiar columnas identificadoras
+    for col in ['filename', 'VehId', 'Vehicle Type']:
+        if col in df.columns:
+            results[col] = df[col]
     
-    print("\n" + "="*70)
-    print("PREDICCIÓN DE CONSUMO ENERGÉTICO")
-    print("="*70)
-    
-    print(f"\nINFORMACIÓN DEL VIAJE:")
-    print(f"Archivo: {filename}")
-    print(f"VehId: {veh_id}")
-    print(f"Tipo de Vehículo: {veh_type}")
-    
-    # Verificar si tiene columnas de cálculo de target
-    has_target_cols = any(col in sample_row.index for col in TARGET_CALCULATION_COLUMNS)
-    
-    if has_target_cols:
-        print(f"\nEste sample contiene las columnas usadas para calcular")
-        print(f"los targets (Fuel Rate, MAF, HV Battery, etc.)")
-        print(f"Los valores reales están disponibles para comparación.")
-    
-    print("\n" + "-"*70)
+    # Si es modelo personalizado
+    if 'custom' in models:
+        model_info = models['custom']
+        model = model_info['model']
+        scaler = model_info['scaler']
+        
+        if scaler:
+            X = prepare_features(df, scaler)
+            X_scaled = scaler.transform(X)
+            results['prediction'] = model.predict(X_scaled)
+        else:
+            # Sin scaler, usar todas las columnas numéricas
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            results['prediction'] = model.predict(df[numeric_cols].fillna(0))
+        
+        return results
     
     # Predicción de combustión
-    if veh_type in ['ICE', 'HEV', 'PHEV'] or sample_type == 'combustion':
-        print("\nCONSUMO DE COMBUSTIÓN (L/100km):")
-        
-        pred_comb = predict_sample(sample_row, models, 'combustion')
-        print(f"Predicción: {pred_comb:.2f} L/100km")
-        
-        # Valor real si existe
-        real_comb = sample_row.get('Y_consumption_combustion_L_per_100km', None)
-        if real_comb is not None and not pd.isna(real_comb) and real_comb > 0:
-            error = pred_comb - real_comb
-            pct_error = (error / real_comb) * 100
-            print(f"Valor Real: {real_comb:.2f} L/100km")
-            print(f"Diferencia: {error:+.2f} L/100km ({pct_error:+.1f}%)")
-            
-            if abs(pct_error) < 10:
-                print(f"Excelente predicción (error < 10%)")
-            elif abs(pct_error) < 25:
-                print(f"Buena predicción (error < 25%)")
-            else:
-                print(f"Predicción con margen de error significativo")
+    scaler_comb = models['combustion']['scaler']
+    model_comb = models['combustion']['model']
+    X_comb = prepare_features(df, scaler_comb)
+    X_comb_scaled = scaler_comb.transform(X_comb)
+    results['pred_combustion_L_per_100km'] = model_comb.predict(X_comb_scaled)
     
-    # Predicción de eléctrico
-    if veh_type in ['PHEV', 'EV', 'HEV'] or sample_type == 'electric':
-        print("\nCONSUMO ELÉCTRICO (kWh/km):")
-        
-        pred_elec = predict_sample(sample_row, models, 'electric')
-        print(f"Predicción: {pred_elec:.4f} kWh/km ({pred_elec*100:.2f} kWh/100km)")
-        
-        # Valor real si existe
-        real_elec = sample_row.get('Y_consumption_electric_kWh_per_km', None)
-        if real_elec is not None and not pd.isna(real_elec) and real_elec > 0:
-            error = pred_elec - real_elec
-            pct_error = (error / real_elec) * 100
-            print(f"Valor Real: {real_elec:.4f} kWh/km ({real_elec*100:.2f} kWh/100km)")
-            print(f"Diferencia: {error:+.4f} kWh/km ({pct_error:+.1f}%)")
-            
-            if abs(pct_error) < 10:
-                print(f"Excelente predicción (error < 10%)")
-            elif abs(pct_error) < 25:
-                print(f"Buena predicción (error < 25%)")
-            else:
-                print(f"Predicción con margen de error significativo")
+    # Predicción eléctrica
+    scaler_elec = models['electric']['scaler']
+    model_elec = models['electric']['model']
+    X_elec = prepare_features(df, scaler_elec)
+    X_elec_scaled = scaler_elec.transform(X_elec)
+    results['pred_electric_kWh_per_km'] = model_elec.predict(X_elec_scaled)
     
-    print("\n" + "="*70)
+    # Aplicar lógica por tipo de vehículo
+    if 'Vehicle Type' in results.columns:
+        # ICE solo tiene combustión
+        ice_mask = results['Vehicle Type'] == 'ICE'
+        results.loc[ice_mask, 'pred_electric_kWh_per_km'] = np.nan
+        
+        # EV solo tiene eléctrico
+        ev_mask = results['Vehicle Type'] == 'EV'
+        results.loc[ev_mask, 'pred_combustion_L_per_100km'] = np.nan
+    
+    return results
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Demo de predicción de consumo energético vehicular',
+        description='Modelo final de predicción de consumo energético vehicular',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
     parser.add_argument(
-        '--index', '-i', type=int, default=None,
-        help='Índice del sample a mostrar (default: aleatorio)'
+        'input_file',
+        type=str,
+        nargs='?',
+        default=None,
+        help='Archivo CSV de entrada (si no se especifica, usa modo demo)'
     )
     parser.add_argument(
-        '--type', '-t', type=str, default='phev',
-        choices=['combustion', 'electric', 'phev', 'random'],
-        help='Tipo de sample a mostrar (default: phev para ver ambos targets)'
+        '-o', '--output',
+        type=str,
+        default='predicciones.csv',
+        help='Archivo CSV de salida (default: predicciones.csv)'
     )
     parser.add_argument(
-        '--list', '-l', action='store_true',
-        help='Lista los samples disponibles sin hacer predicción'
+        '--show',
+        action='store_true',
+        help='Mostrar predicciones en consola'
+    )
+    parser.add_argument(
+        '-m', '--model',
+        type=str,
+        default=None,
+        help='Path a modelo .pkl personalizado'
     )
     
     args = parser.parse_args()
     
-    print("\n" + "="*70)
-    print("VED - Vehicle Energy Dataset - Predicción de Consumo")
-    print("="*70)
+    # Cargar modelos
+    print("Cargando modelos...")
+    models = load_models(args.model)
     
-    print("\nCargando modelos...")
-    try:
-        models = load_models()
-        print("Modelos cargados correctamente")
-    except FileNotFoundError as e:
-        print(f"\nError: {e}")
-        return 1
-    
-    metrics = models['metrics']
-    print(f"\nModelo Combustión: R²={metrics['combustion']['r2']:.4f}, RMSE={metrics['combustion']['rmse']:.4f}")
-    print(f"Modelo Eléctrico: R²={metrics['electric']['r2']:.4f}, RMSE={metrics['electric']['rmse']:.4f}")
-    
-    print("\nCargando samples de demostración...")
-    try:
-        samples = load_demo_samples(args.type)
-        if not samples:
-            print("No se encontraron samples de demostración")
-            return 1
-    except FileNotFoundError as e:
-        print(f"\nError: {e}")
-        return 1
-    
-    # Determinar qué dataset usar
-    if args.type == 'phev' and 'phev' in samples:
-        df = samples['phev']
-        sample_type = 'phev'
-    elif args.type == 'combustion' and 'combustion' in samples:
-        df = samples['combustion']
-        sample_type = 'combustion'
-    elif args.type == 'electric' and 'electric' in samples:
-        df = samples['electric']
-        sample_type = 'electric'
-    elif args.type == 'random':
-        # Elegir aleatoriamente un dataset
-        available = list(samples.keys())
-        sample_type = np.random.choice(available)
-        df = samples[sample_type]
+    if args.model:
+        print(f"Modelo personalizado: {args.model}")
     else:
-        # Fallback a cualquier disponible
-        sample_type = list(samples.keys())[0]
-        df = samples[sample_type]
+        metrics = models['metrics']
+        print(f"Combustión R²={metrics['combustion']['r2']:.2f} | Eléctrico R²={metrics['electric']['r2']:.2f}")
     
-    print(f"Usando dataset: {sample_type} ({len(df)} samples disponibles)")
+    # Modo demo si no se especifica archivo o se usa "_"
+    if args.input_file is None or args.input_file == '_':
+        output = args.output if args.input_file == '_' else None
+        return demo_mode(models, output)
     
-    # Listar samples
-    if args.list:
-        print(f"\nSamples disponibles en '{sample_type}':")
-        for i, row in df.iterrows():
-            veh_type = row.get('Vehicle Type', 'N/A')
-            filename = row.get('filename', 'N/A')
-            print(f"[{i:3d}] {veh_type:5s} - {filename}")
-        return 0
+    # Verificar archivo de entrada
+    input_path = Path(args.input_file)
+    if not input_path.exists():
+        print(f"Error: No se encontró el archivo: {args.input_file}")
+        sys.exit(1)
     
-    # Seleccionar sample
-    if args.index is not None:
-        if args.index >= len(df):
-            print(f"Índice {args.index} fuera de rango (max: {len(df)-1})")
-            return 1
-        idx = args.index
-    else:
-        idx = np.random.randint(0, len(df))
+    # Cargar datos
+    print(f"\nDatos: {args.input_file}")
+    df = pd.read_csv(input_path, low_memory=False)
+    print(f"  {len(df)} registros")
     
-    sample_row = df.iloc[idx]
+    # Realizar predicciones
+    results = predict(df, models)
     
-    print(f"\nMostrando sample #{idx}:")
+    # Guardar resultados
+    output_path = Path(args.output)
+    results.to_csv(output_path, index=False)
+    print(f"\nPredicciones guardadas en: {output_path}")
     
-    display_prediction(sample_row, models, sample_type)
+    # Mostrar resumen
+    print(f"\nResumen:")
     
-    print("\nUso: python main.py --help para ver más opciones\n")
+    valid_comb = results['pred_combustion_L_per_100km'].notna()
+    if valid_comb.any():
+        mean_comb = results.loc[valid_comb, 'pred_combustion_L_per_100km'].mean()
+        print(f"  Combustión: {valid_comb.sum()} predicciones, promedio {mean_comb:.2f} L/100km")
+    
+    valid_elec = results['pred_electric_kWh_per_km'].notna()
+    if valid_elec.any():
+        mean_elec = results.loc[valid_elec, 'pred_electric_kWh_per_km'].mean()
+        print(f"  Eléctrico:  {valid_elec.sum()} predicciones, promedio {mean_elec:.4f} kWh/km")
+    
+    # Mostrar predicciones si se solicita
+    if args.show:
+        print("\nPredicciones:")
+        print(results.to_string(index=False))
     
     return 0
 
 
 if __name__ == '__main__':
-    exit(main())
+    sys.exit(main())
